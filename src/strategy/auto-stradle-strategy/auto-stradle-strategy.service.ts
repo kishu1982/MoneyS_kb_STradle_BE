@@ -17,7 +17,7 @@ export class AutoStradleStrategyService {
   constructor(
     @InjectRepository(AutoStradleDataEntity)
     private readonly autoStradleRepo: MongoRepository<AutoStradleDataEntity>,
-  ) {}
+  ) { }
 
   /**
    * Create a new AutoStradleStrategy configuration
@@ -397,13 +397,5 @@ export class AutoStradleStrategyService {
     this.logger.debug(`[VALIDATE_LEGS] Legs count validation passed`);
   }
 
-  // now getting data form websocket for further calcualtion and processing
-  public async processWebSocketDataAutoStrategy(data: any): Promise<void> {
-    // logging the data received from websocket
-    data.tk === '26000'
-      ? this.logger.debug(
-          `[WS_DATA] Received data from WebSocket: ${JSON.stringify(data)}`,
-        )
-      : '';
-  }
+
 }

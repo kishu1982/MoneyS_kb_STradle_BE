@@ -11,6 +11,7 @@ import { TradingviewTradeConfigService } from 'src/strategy/tradingview-trade-co
 import { StoplossTargetService } from 'src/strategy/trades/stoploss-target/stoploss-target.service';
 import { read } from 'fs';
 import { AutoStradleStrategyService } from 'src/strategy/auto-stradle-strategy';
+import { AutoStradleHelperExecution } from 'src/strategy/auto-stradle-strategy/autostradle_helper_execution';
 
 const NorenWebSocket = require('norenrestapi/lib/websocket');
 
@@ -30,7 +31,8 @@ export class WebsocketService implements OnModuleInit, OnModuleDestroy {
     private readonly tradeConfigService: TradingviewTradeConfigService,
     private readonly stoplossTargetService: StoplossTargetService,
     private readonly autoStradleStrategyService: AutoStradleStrategyService,
-  ) {}
+    private readonly autoStradleHelperHelperFile: AutoStradleHelperExecution,
+  ) { }
 
   /* ===============================
      Lifecycle
@@ -115,7 +117,7 @@ export class WebsocketService implements OnModuleInit, OnModuleDestroy {
           // 🔥 Forward tick to Strategy module
           this.strategyService.onTick(tick);
           this.stoplossTargetService.onTick(tick);
-          this.autoStradleStrategyService.processWebSocketDataAutoStrategy(tick);
+          this.autoStradleHelperHelperFile.processWebSocketData(tick);
 
           // console.log(
           //   `📈 PRICE | ${tick.e || ''}|${tick.tk || ''} | LTP: ${
@@ -130,8 +132,7 @@ export class WebsocketService implements OnModuleInit, OnModuleDestroy {
         // 📦 ORDER UPDATES (optional)
         order: (order: any) => {
           this.logger.log(
-            `📦 ORDER | ${order?.norenordno ?? ''} | Status: ${
-              order?.status ?? ''
+            `📦 ORDER | ${order?.norenordno ?? ''} | Status: ${order?.status ?? ''
             }`,
           );
         },
