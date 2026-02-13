@@ -465,4 +465,63 @@ Any qty → qty 0	Close all	PLACED
       this.logger.warn(`⚠️ Net position mismatch → expected=${desiredNetQty}`);
     }
   }
+
+  // =====================================================
+  // 🔹 CLOSE POSITION BY SYMBOL OR TOKEN
+  // =====================================================
+  async closePositionBySymbolOrToken(
+    tradingSymbolName: string,
+    tokenNumber: string,
+  ): Promise<void> {
+    tradingSymbolName = tradingSymbolName.toUpperCase();
+    this.logger.log(
+      `📌 Closing positions for symbol=${tradingSymbolName} or token=${tokenNumber}`,
+    );
+
+    const netPositions = await this.orderService.getNetPositions();
+
+    if (!Array.isArray(netPositions?.data)) {
+      this.logger.warn('No net positions data available');
+      return;
+    }
+
+    const matchingPositions = netPositions.data.filter(
+      (p) => p.token === tokenNumber || p.tsym === tradingSymbolName,
+    );
+
+    if (!matchingPositions.length) {
+      this.logger.warn('No matching positions found for SquareOff');
+      return;
+    }
+
+    for (const pos of matchingPositions) {
+      const netQty = Number(pos.netqty || 0);
+
+      if (netQty === 0) continue;
+
+      const closeSide = netQty > 0 ? 'SELL' : 'BUY';
+
+      // Assume INTRADAY for manual closes, can be made configurable
+      const productType = 'INTRADAY';
+
+      await this.orderService.placeOrder({
+        buy_or_sell: closeSide === 'BUY' ? 'B' : 'S',
+        product_type: this.resolveProductType(productType),
+        exchange: pos.exch,
+        tradingsymbol: pos.tsym,
+        quantity: Math.abs(netQty),
+        price_type: 'MKT',
+        price: 0,
+        trigger_price: 0,
+        discloseqty: 0,
+        retention: 'DAY',
+        amo: 'NO',
+        remarks: `MANUAL Square off CLOSE | ${pos.tsym}`,
+      });
+
+      this.logger.log(
+        `🔁 Closed position | ${pos.exch}:${pos.tsym} | qty=${Math.abs(netQty)}`,
+      );
+    }
+  }
 }
