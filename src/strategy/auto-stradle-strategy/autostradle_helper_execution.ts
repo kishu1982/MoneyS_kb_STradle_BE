@@ -15,10 +15,14 @@ import * as fs from 'fs';
 import { TradingviewTradeConfigService } from '../tradingview-trade-config/tradingview-trade-config.service';
 
 export interface WebSocketTickData {
-  e?: string;
-  tk?: string;
-  lp?: string;
-  [key: string]: any;
+  e?: string; // exchange name
+  tk?: string; // script token
+  ts?: string; // symbol name
+  lp?: string; // LTP
+  ti?: string; // tick size
+  bp1?: string; // best bid price
+  ap1?: string; // best ask price
+  [key: string]: any; // other fields can be present but are not used in current logic
 }
 
 @Injectable()
@@ -40,11 +44,16 @@ export class AutoStradleHelperExecution implements OnModuleInit {
   // ⭐ PREBUILT PAYLOAD CACHE
   private preparedPayloadMap = new Map<string, any[]>();
 
+  // store latest net positions
+  private netPositions: any[] = [];
+
   // Sleep ms between processing each payload to avoid hitting rate limits ( adjust as needed )
   private payloadProcessingDelay = 500;
 
   // promis resolve wait logic variable Add queue variable
   private syncQueue: Promise<void> = Promise.resolve();
+  private quoteQueue: Promise<any> = Promise.resolve(); // for quotes update
+  private netPositionQueue: Promise<void> = Promise.resolve(); // for net position update
 
   constructor(
     @Inject(forwardRef(() => AutoStradleStrategyService))
@@ -108,6 +117,9 @@ export class AutoStradleHelperExecution implements OnModuleInit {
     try {
       if (!this.isAutoStradleEnabled) return;
 
+      // // ⭐ refresh net positions first
+      // await this.refreshNetPositions();
+
       // 1️⃣ load active stradles
       this.activeStradleData = await this.autoStradleService.findActive();
 
@@ -130,12 +142,28 @@ export class AutoStradleHelperExecution implements OnModuleInit {
             lp,
             stradle.otmDifference,
             leg.optionType,
+            stradle.symbolName,
           );
-          //   this.logger.log(
-          //     `Calculated strike for leg ${leg.side} for ${tick.tk} as CMP is ${tick.lp} and strike is ${strike}`,
-          //   );
+          // this.logger.log(
+          //   `Calculated strike for leg ${leg.side} for ${tick.tk} as CMP is ${tick.lp} and strike is ${strike}`,
+          // );
 
           //   const instKey = `${leg.exch}|${leg.instrument}|${leg.optionType}|${leg.expiry}|${stradle.symbolName}|${strike}`;
+
+          // filtering name nifty index to nifty
+          const indexNameFilter = {
+            'Nifty 50': 'NIFTY',
+            'Nifty Bank': 'BANKNIFTY',
+            'NIFTY BANK': 'BANKNIFTY',
+          };
+
+          if (indexNameFilter[stradle.symbolName]) {
+            stradle.symbolName = indexNameFilter[stradle.symbolName];
+          }
+
+          /////////////////////////////////////////
+
+          // this.logger.log('stradle symbol name recvied: ', stradle.symbolName);
 
           //   const instrument = this.instrumentMap.get(instKey);
           const instrumentResults = this.instruments.filter(
@@ -160,10 +188,11 @@ export class AutoStradleHelperExecution implements OnModuleInit {
           if (!instrument) continue;
 
           // quote fetch ONLY here
-          const quote = await this.marketService.getQuotes({
-            exch: instrument.exchange,
-            token: instrument.token,
-          });
+          // const quote = await this.marketService.getQuotes({
+          //   exch: instrument.exchange,
+          //   token: instrument.token,
+          // });
+          const quote = await this.enqueueQuoteRequest(instrument);
 
           if (!quote?.lp) continue;
 
@@ -174,9 +203,9 @@ export class AutoStradleHelperExecution implements OnModuleInit {
             stradle.amountForLotCalEachLeg / (legLP * lotsize),
           );
 
-          //   this.logger.log(
-          //     `Calculated quantity for leg ${leg.side} for ${tick.tk} as CMP is ${tick.lp} and legLP is ${legLP} and lotsize is ${lotsize} and quantityLots is ${quantityLots}`,
-          //   );
+          // this.logger.log(
+          //   `Calculated quantity for leg ${leg.side} for ${tick.tk} as CMP is ${tick.lp} and legLP is ${legLP} and lotsize is ${lotsize} and quantityLots is ${quantityLots}`,
+          // );
 
           payloadLegs.push({
             tokenNumber: instrument.token,
@@ -186,10 +215,10 @@ export class AutoStradleHelperExecution implements OnModuleInit {
             side: leg.side,
           });
 
-          //   this.logger.debug(
-          //     `final payload leg for ${instrument.tradingSymbol} is : `,
-          //     payloadLegs,
-          //   );
+          // this.logger.debug(
+          //   `final payload leg for ${instrument.tradingSymbol} is : `,
+          //   payloadLegs,
+          // );
 
           // ⭐ delay to avoid API rate limit
           await this.sleep(this.payloadProcessingDelay);
@@ -207,6 +236,8 @@ export class AutoStradleHelperExecution implements OnModuleInit {
           signalStatus: stradle.status,
           toBeTradedOn: payloadLegs,
         };
+
+        // this.logger.debug('final payload prepared for Debug: ', payload);
 
         // calling sync fucntion too
         await this.enqueueSync(payload);
@@ -238,6 +269,9 @@ export class AutoStradleHelperExecution implements OnModuleInit {
         return;
       }
 
+      // ⭐ refresh net positions first
+      await this.enqueueRefreshNetPositions();
+
       const exchange = data.e;
       const token = data.tk;
 
@@ -245,8 +279,20 @@ export class AutoStradleHelperExecution implements OnModuleInit {
 
       const subscriptionKey = `${exchange}|${token}`;
 
-      this.filteredWebSocketData.set(subscriptionKey, data); // store each token data updates it with latest tick data
-      //this.logger.log(this.filteredWebSocketData);
+      // get previous stored tick
+      const previousTick =
+        this.filteredWebSocketData.get(subscriptionKey) || {};
+
+      // merge old + new tick data
+      const mergedTick: WebSocketTickData = {
+        ...previousTick,
+        ...data,
+      };
+
+      // store merged tick
+      this.filteredWebSocketData.set(subscriptionKey, mergedTick);
+      // store each token data updates it with latest tick data
+      // this.logger.debug(`[WS] Updated ${subscriptionKey}`, mergedTick);
 
       // ⭐ ONLY execution using prepared payload
       const payloads = this.preparedPayloadMap.get(subscriptionKey);
@@ -254,7 +300,8 @@ export class AutoStradleHelperExecution implements OnModuleInit {
       if (!payloads?.length) return;
 
       for (const payload of payloads) {
-        // this.logger.debug('[AUTO STRADLE PAYLOAD]', payload);
+        //   this.logger.debug('[AUTO STRADLE PAYLOAD]', payload);
+        //this.logger.debug(`net positions for reference: `, this.netPositions);
         // here call ordersService when needed
         // await this.ordersService.execute(payload);
       }
@@ -266,12 +313,22 @@ export class AutoStradleHelperExecution implements OnModuleInit {
     }
   }
 
-  private calcStrike(lp: number, otm: number, type: string) {
+  private calcStrike(
+    lp: number,
+    otm: number,
+    type: string,
+    symbolName: string,
+  ) {
     const diff = (otm * lp) / 100;
 
     const raw = type === 'CE' ? lp + diff : lp - diff;
+    // NEED TO KEEP ROUND AS 100 COZ BSE AND BANK NIFTY DOESNT SUPPORT 50 ROUND
 
-    return Math.round(raw / 50) * 50;
+    if (symbolName.includes('NIFTY')) {
+      return Math.round(raw / 50) * 50;
+    } else {
+      return Math.round(raw / 100) * 100;
+    }
   }
 
   /*
@@ -466,5 +523,61 @@ else skip
     });
 
     return this.syncQueue;
+  }
+
+  // getting net position
+  // private async refreshNetPositions(): Promise<void> {
+  //   try {
+  //     const result = await this.ordersService.getNetPositions();
+
+  //     if (result.success) {
+  //       this.netPositions = result.data || [];
+  //       this.logger.debug(
+  //         `[NET POSITIONS] Updated (${this.netPositions.length})`,
+  //       );
+  //     } else {
+  //       this.logger.warn(`[NET POSITIONS] API returned failure`);
+  //     }
+  //   } catch (error) {
+  //     this.logger.error(`[NET POSITIONS ERROR] ${error.message}`, error.stack);
+  //   }
+  // }
+
+  // wraper for getting net position with queue to avoid multiple concurrent calls and ensure latest data is used in execution logic
+  private enqueueRefreshNetPositions(): Promise<void> {
+    this.netPositionQueue = this.netPositionQueue.then(async () => {
+      try {
+        const result = await this.ordersService.getNetPositions();
+
+        if (result.success) {
+          this.netPositions = result.data || [];
+
+          this.logger.debug(
+            `[NET POSITIONS] Updated (${this.netPositions.length})`,
+          );
+        } else {
+          this.logger.warn(`[NET POSITIONS] API returned failure`);
+        }
+      } catch (error) {
+        this.logger.error(
+          `[NET POSITIONS ERROR] ${error.message}`,
+          error.stack,
+        );
+      }
+    });
+
+    return this.netPositionQueue;
+  }
+
+  // waiting till quotes are updated with previous await promise
+  private enqueueQuoteRequest(instrument: any) {
+    this.quoteQueue = this.quoteQueue.then(async () => {
+      return await this.marketService.getQuotes({
+        exch: instrument.exchange,
+        token: instrument.token,
+      });
+    });
+
+    return this.quoteQueue;
   }
 }

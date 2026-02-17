@@ -54,7 +54,7 @@ export class CreateTradeConfigDto {
 
   @IsNumber()
   @Min(1)
-  @IsNotEmpty()
+  @IsNotEmpty({message : 'minimum should be 1'})
   legs: number;
 
   @IsEnum(['ACTIVE', 'INACTIVE'])

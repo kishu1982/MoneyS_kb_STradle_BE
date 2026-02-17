@@ -35,6 +35,8 @@ export class TradingviewTradeConfigService {
       side: dto.side,
     };
 
+    // this.logger.log('recived data Dto', dto);
+
     let tradeLegs: TradeLeg[] = [];
 
     // Normalize EXIT logic
