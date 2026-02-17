@@ -325,7 +325,8 @@ export class AutoStradleHelperExecution implements OnModuleInit {
     // NEED TO KEEP ROUND AS 100 COZ BSE AND BANK NIFTY DOESNT SUPPORT 50 ROUND
 
     if (symbolName.includes('NIFTY')) {
-      return Math.round(raw / 50) * 50;
+      // return Math.round(raw / 50) * 50;
+      return Math.round(raw / 100) * 100;
     } else {
       return Math.round(raw / 100) * 100;
     }
